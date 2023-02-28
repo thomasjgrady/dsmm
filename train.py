@@ -30,7 +30,7 @@ class TrainConfig:
     n_batches: int = field(init=False)
 
     # Minimum learning rate
-    min_lr: float = 1e-4
+    min_lr: float = 1e-5
 
     # Maximum learning rate
     max_lr: float = 1e-3
@@ -42,12 +42,15 @@ class TrainConfig:
     # Weight decay
     weight_decay: float = 1e-4
 
+    # Gradient clipping
+    clip_grad: float = 5.0
+
     # Checkpoint interval (in examples)
     checkpoint_interval: int = 20_000
     checkpoint_interval_batches: int = field(init=False)
 
     # Path to save checkpoints to
-    checkpoint_dir = 'checkpoints'
+    checkpoint_dir: str = 'checkpoints'
 
     # Perturbation applied to x as a function of t to add noise resillience
     perturbation: Callable = default_perturbation
@@ -123,7 +126,7 @@ def get_train_batch(x: np.ndarray, model_config: ModelConfig, train_config: Trai
 
 def get_lr(batch_idx: int, config: TrainConfig) -> float:
     if batch_idx < config.n_warmup_batches:
-        return np.sin(batch_idx/config.n_warmup_batches)
+        return config.max_lr*np.sin(batch_idx/config.n_warmup_batches)
     else:
         frac = np.cos((batch_idx-config.n_warmup_batches)/config.n_batches)
         return frac*config.max_lr + (1-frac)*config.min_lr
@@ -135,6 +138,7 @@ if __name__ == '__main__':
     import time
 
     timestamp = int(time.time())
+    print(f'timestamp = {timestamp}')
 
     parser = ArgumentParser()
     parser.add_arguments(ModelConfig, dest='model')
@@ -209,8 +213,17 @@ if __name__ == '__main__':
         # Compute model prediction
         v_pred = model.forward(p, x, t)
         loss = F.mse_loss(v_pred, v_true)*args.train.loss_scaling
-        loss.backward()
-        optim.step()
+
+        try:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.train.clip_grad)
+            optim.step()
+        except Exception as e:
+            print(f'Error in gradient computation: {e}')
+            print(f't = {t}')
+            print(f'v_true = {v_true}')
+            print(f'v_pred = {v_pred}')
+
 
         print(f'batch = {i:08d}/{args.train.n_batches:08d}, loss = {loss.item():2.8f}, lr = {lr:2.8f}', flush=True)
 
